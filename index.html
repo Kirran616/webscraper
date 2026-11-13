@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Scraper Tool</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+  header { background: #0a2a5e; color: #fff; padding: 24px 20px; text-align: center; }
+  header p { margin: 6px 0 0; opacity: .85; }
+  main { max-width: 900px; margin: 24px auto; padding: 0 16px 40px; }
+  .card { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,.08); margin-bottom: 18px; }
+  label { font-weight: bold; display: block; margin-bottom: 8px; }
+  input[type="url"] { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; }
+  button { margin-top: 12px; padding: 12px 22px; font-size: 16px; border: 0; border-radius: 8px;
+           background: #0a7a3d; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  button.secondary { background: #0a2a5e; margin-left: 8px; }
+  #status { margin-top: 12px; color: #b00020; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+  .stat { background: #eef4ff; border-radius: 8px; padding: 10px 14px; }
+  .stat b { font-size: 20px; display: block; }
+  h2 { margin-top: 0; }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 6px; word-break: break-word; }
+  pre { background: #111; color: #d6ffd6; padding: 14px; border-radius: 8px; overflow: auto; max-height: 400px; }
+  .hidden { display: none; }
+  a { color: #0a2a5e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🕷️ Web Scraper Tool</h1>
+  <p>Paste a link — get the title, headings, text, links, images, tables and more.</p>
+</header>
+
+<main>
+  <div class="card">
+    <label for="url">Website link</label>
+    <input type="url" id="url" placeholder="https://example.com" value="https://example.com">
+    <button id="scrapeBtn" onclick="scrape()">Scrape this page</button>
+    <button id="downloadBtn" class="secondary hidden" onclick="downloadJson()">Download JSON</button>
+    <div id="status"></div>
+  </div>
+
+  <div id="results" class="hidden">
+    <div class="card">
+      <h2 id="resultTitle"></h2>
+      <p id="resultMeta"></p>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div class="card">
+      <h2>Headings</h2>
+      <div id="headings"></div>
+    </div>
+
+    <div class="card">
+      <h2>Links (<span id="linkCount">0</span>)</h2>
+      <ul id="links"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Images (<span id="imageCount">0</span>)</h2>
+      <ul id="images"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Full JSON</h2>
+      <pre id="jsonOut"></pre>
+    </div>
+  </div>
+</main>
+
+<script>
+let lastData = null;
+
+// Send the URL to the Python backend (app.py -> /api/scrape)
+// and show everything it returns.
+async function scrape() {
+  const url = document.getElementById('url').value.trim();
+  const status = document.getElementById('status');
+  const btn = document.getElementById('scrapeBtn');
+
+  if (!url) { status.textContent = 'Please paste a link first.'; return; }
+
+  status.textContent = 'Scraping… please wait.';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || 'Scraping failed.');
+
+    lastData = data;
+    showResults(data);
+    status.textContent = '';
+  } catch (err) {
+    // This usually means the Python server (python app.py) is not running,
+    // or the site blocked the request.
+    status.textContent = 'Error: ' + err.message +
+      ' — make sure you ran "python app.py" first.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showResults(data) {
+  document.getElementById('results').classList.remove('hidden');
+  document.getElementById('downloadBtn').classList.remove('hidden');
+
+  document.getElementById('resultTitle').textContent = data.title || '(no title)';
+  document.getElementById('resultMeta').textContent =
+    (data.meta && data.meta.description) || '';
+  document.getElementById('resultMeta').textContent += '  —  ' + data.url;
+
+  const c = data.counts;
+  document.getElementById('stats').innerHTML =
+    stat(c.links, 'Links') + stat(c.images, 'Images') +
+    stat(c.paragraphs, 'Paragraphs') + stat(data.word_count, 'Words') +
+    stat(c.tables, 'Tables') + stat(c.forms, 'Forms');
+
+  let headingsHtml = '';
+  for (const level in data.headings) {
+    data.headings[level].forEach(function (h) {
+      headingsHtml += '<p><b>' + level.toUpperCase() + ':</b> ' + escapeHtml(h) + '</p>';
+    });
+  }
+  document.getElementById('headings').innerHTML = headingsHtml || '<p>No headings found.</p>';
+
+  document.getElementById('linkCount').textContent = data.links.length;
+  document.getElementById('links').innerHTML = data.links.slice(0, 100).map(function (l) {
+    return '<li><a href="' + escapeHtml(l.href) + '" target="_blank" rel="noopener">' +
+      escapeHtml(l.text || l.href) + '</a></li>';
+  }).join('') || '<li>No links found.</li>';
+
+  document.getElementById('imageCount').textContent = data.images.length;
+  document.getElementById('images').innerHTML = data.images.slice(0, 100).map(function (img) {
+    return '<li><a href="' + escapeHtml(img.src) + '" target="_blank" rel="noopener">' +
+      escapeHtml(img.alt || img.src) + '</a></li>';
+  }).join('') || '<li>No images found.</li>';
+
+  document.getElementById('jsonOut').textContent = JSON.stringify(data, null, 2);
+}
+
+function stat(num, label) {
+  return '<div class="stat"><b>' + num + '</b>' + label + '</div>';
+}
+
+// Download the full result as a JSON file.
+function downloadJson() {
+  if (!lastData) return;
+  const blob = new Blob([JSON.stringify(lastData, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'scraped_data.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function (ch) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+  });
+}
+
+// Press Enter in the URL box to scrape.
+document.getElementById('url').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') scrape();
+});
+</script>
+</body>
+</html>
